@@ -13,7 +13,9 @@ use clap::Command as ClapCommand;
 use humility_cmd::{
     ArchiveRequired, Attach, AttachementMetadata, Command, Validate,
 };
-use reedline::{PromptHistorySearchStatus, Reedline, Signal};
+use reedline::{
+    FileBackedHistory, PromptHistorySearchStatus, Reedline, Signal,
+};
 
 use crate::cmd;
 
@@ -57,7 +59,12 @@ impl reedline::Prompt for Prompt {
 }
 
 fn repl(context: &mut humility::ExecutionContext) -> Result<()> {
-    let mut line_editor = Reedline::create()?;
+    // hardcoding to 100 entries for now. Even though this is called
+    // FileBackedHistory, this constructor only uses one in-memory.
+    let history = Box::new(FileBackedHistory::new(100));
+
+    let mut line_editor = Reedline::create()?.with_history(history)?;
+
     let prompt = Prompt;
 
     println!("Welcome to the humility REPL! Try out some subcommands, or 'quit' to quit!");
@@ -67,8 +74,20 @@ fn repl(context: &mut humility::ExecutionContext) -> Result<()> {
 
         match sig {
             Signal::Success(buffer) => {
-                let result = eval(context, &buffer)?;
-                println!("{result}");
+                let buffer = buffer.trim();
+                match buffer {
+                    "quit" => {
+                        println!("Quitting!");
+                        std::process::exit(0);
+                    }
+                    "history" => {
+                        line_editor.print_history()?;
+                    }
+                    user_input => {
+                        let result = eval(context, user_input)?;
+                        println!("{result}");
+                    }
+                }
             }
             Signal::CtrlD | Signal::CtrlC => {
                 println!("\nAborted!");
@@ -83,27 +102,21 @@ fn repl(context: &mut humility::ExecutionContext) -> Result<()> {
 
 fn eval(
     context: &mut humility::ExecutionContext,
-    input: &str,
+    user_input: &str,
 ) -> Result<String> {
-    match input.trim() {
-        "quit" => {
-            println!("Quitting!");
-            std::process::exit(0);
-        }
-        user_input => {
-            let mut input = vec!["humility"];
-            input.extend(user_input.split(' '));
+    let mut input = vec!["humility"];
+    input.extend(user_input.split(' '));
 
-            let (commands, _, cli) = crate::parse_args(input);
-            context.cli = cli;
-            if let Err(e) = cmd::subcommand(context, &commands) {
-                Ok(format!(
-                    "I'm sorry, Dave. I'm afraid I can't understand that: '{e}'",
-                ))
-            } else {
-                Ok(String::new())
-            }
-        }
+    let (commands, _, cli) = crate::parse_args(input);
+
+    context.cli = cli;
+
+    if let Err(e) = cmd::subcommand(context, &commands) {
+        Ok(format!(
+            "I'm sorry, Dave. I'm afraid I can't understand that: '{e}'",
+        ))
+    } else {
+        Ok(String::new())
     }
 }
 
