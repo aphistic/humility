@@ -6,30 +6,78 @@
 //!
 //! read, eval, print, loop
 
+use std::borrow::Cow;
+
 use anyhow::Result;
 use clap::Command as ClapCommand;
 use humility_cmd::{
     ArchiveRequired, Attach, AttachementMetadata, Command, Validate,
 };
-
-use std::io::{self, Write};
+use reedline::{PromptHistorySearchStatus, Reedline, Signal};
 
 use crate::cmd;
 
+struct Prompt;
+
+impl reedline::Prompt for Prompt {
+    fn render_prompt_left(&self) -> Cow<str> {
+        Cow::from("humility")
+    }
+
+    fn render_prompt_right(&self) -> Cow<str> {
+        Cow::default()
+    }
+
+    fn render_prompt_indicator(
+        &self,
+        _prompt_mode: reedline::PromptEditMode,
+    ) -> Cow<str> {
+        // not getting fancy for now
+        Cow::from("> ")
+    }
+
+    fn render_prompt_multiline_indicator(&self) -> Cow<str> {
+        Cow::from("... ")
+    }
+
+    fn render_prompt_history_search_indicator(
+        &self,
+        history_search: reedline::PromptHistorySearch,
+    ) -> Cow<str> {
+        let prefix = match history_search.status {
+            PromptHistorySearchStatus::Passing => "",
+            PromptHistorySearchStatus::Failing => "failing ",
+        };
+
+        Cow::Owned(format!(
+            "({}reverse-search: {}) ",
+            prefix, history_search.term
+        ))
+    }
+}
+
 fn repl(context: &mut humility::ExecutionContext) -> Result<()> {
-    let mut input = String::new();
+    let mut line_editor = Reedline::create()?;
+    let prompt = Prompt;
 
     println!("Welcome to the humility REPL! Try out some subcommands, or 'quit' to quit!");
+
     loop {
-        print!("> ");
-        io::stdout().flush()?;
+        let sig = line_editor.read_line(&prompt)?;
 
-        io::stdin().read_line(&mut input)?;
-        let result = eval(context, &input)?;
-        println!("{}", result);
-
-        context.history.push(input.clone());
-        input.clear();
+        match sig {
+            Signal::Success(buffer) => {
+                let result = eval(context, &buffer)?;
+                println!("{result}");
+            }
+            Signal::CtrlD | Signal::CtrlC => {
+                println!("\nAborted!");
+                break Ok(());
+            }
+            Signal::CtrlL => {
+                line_editor.clear_screen().unwrap();
+            }
+        }
     }
 }
 
@@ -42,7 +90,6 @@ fn eval(
             println!("Quitting!");
             std::process::exit(0);
         }
-        "history" => Ok(context.history.join("").trim().to_string()),
         user_input => {
             let mut input = vec!["humility"];
             input.extend(user_input.split(' '));
@@ -51,10 +98,10 @@ fn eval(
             context.cli = cli;
             if let Err(e) = cmd::subcommand(context, &commands) {
                 Ok(format!(
-                    "I'm sorry, Dave. I'm afraid I can't understand that. {e}",
+                    "I'm sorry, Dave. I'm afraid I can't understand that: '{e}'",
                 ))
             } else {
-                Ok(String::from("It worked!"))
+                Ok(String::new())
             }
         }
     }
